@@ -50,6 +50,33 @@ public without sharing class KH_FindConsumer {
         'salesforce marketing cloud opts and bounces'=> 'Hallmark Unsubscribe/Bounce',
         'sproutloud opts and bounces'                 => 'Local Retailer Unsubscribe/Bounce'
     };
+
+    private static Map<String, String> metadataSourceTranslations;
+    @TestVisible private static Map<String, String> sourceTranslationOverrides;
+
+    // QA-only switch. The provider is loaded dynamically so its Apex class can be
+    // excluded completely from PROD deployments without creating a compile dependency.
+    private static final Boolean KH_DEMO_MODE_ENABLED = true;
+    private static final String KH_DEMO_PROVIDER_CLASS = 'KH_DemoDataProvider';
+
+    public interface KhDemoProvider {
+        KH_ConsumerMergeWrapper findConsumer(Account consumerRecord);
+        CareConsumerEmails_Wrapper.Emails findEmail(String cid);
+        CareConsumerPhones_Wrapper.Phones findPhone(String cid);
+    }
+
+    private static KhDemoProvider getKhDemoProvider() {
+        if (!KH_DEMO_MODE_ENABLED) {
+            return null;
+        }
+        try {
+            Type providerType = Type.forName(KH_DEMO_PROVIDER_CLASS);
+            return providerType == null ? null : (KhDemoProvider) providerType.newInstance();
+        } catch (Exception ignored) {
+            // The QA-only provider is intentionally absent from PROD.
+            return null;
+        }
+    }
     @AuraEnabled
     public static String createConsumerController(Account consumerRecord) {
         String consumerId = null;
@@ -290,6 +317,15 @@ public without sharing class KH_FindConsumer {
         //Setting up variables
         List<KH_ConsumerMergeWrapper> consumerRecordsMerged = new List<KH_ConsumerMergeWrapper>();
         CEMS_CustomerData_Wrapper consumerRecords = null;
+
+        KhDemoProvider demoProvider = getKhDemoProvider();
+        KH_ConsumerMergeWrapper demoConsumer = demoProvider == null
+            ? null
+            : demoProvider.findConsumer(consumerRecord);
+        if (demoConsumer != null) {
+            consumerRecordsMerged.add(demoConsumer);
+            return consumerRecordsMerged;
+        }
         
         //Using the CEMS Connector to make a GET request to CCDB
         CEMS_Connector_v2 cemConnect = new CEMS_Connector_v2('GET', null);
@@ -526,40 +562,19 @@ public without sharing class KH_FindConsumer {
         return  consumerCID;
     }
     
-    public static String convertUtcToCentral(String utcString) {
-    List<String> parts = utcString.split(' ');
-    List<String> dateParts = parts[0].split('/');
-    List<String> timeParts = parts[1].split(':');
-
-    Integer month = Integer.valueOf(dateParts[0]);
-    Integer day = Integer.valueOf(dateParts[1]);
-    Integer year = Integer.valueOf(dateParts[2]);
-
-    Integer hour = Integer.valueOf(timeParts[0]);
-    Integer minute = Integer.valueOf(timeParts[1]);
-    Integer second = Integer.valueOf(timeParts[2]);
-
-    if (parts[2] == 'PM' && hour != 12) {
-        hour += 12;
-    } else if (parts[2] == 'AM' && hour == 12) {
-        hour = 0;
-    }
-
-    DateTime utcDateTime = DateTime.newInstanceGmt(
-        year, month, day, hour, minute, second
-    );
-
-    return utcDateTime.format(
-        'M/d/yyyy h:mm:ss a',
-        'America/Chicago'
-    );
-}
-    
     //Naeem: care-1156 Ability to delete email association to Consumer record
     @AuraEnabled
     public static List<CareConsumerEmails_Wrapper.Emails> getConsumerEmails(String CID) {
         
         List<CareConsumerEmails_Wrapper.Emails> consumerEmails = new List<CareConsumerEmails_Wrapper.Emails>();
+        KhDemoProvider demoProvider = getKhDemoProvider();
+        CareConsumerEmails_Wrapper.Emails demoEmail = demoProvider == null
+            ? null
+            : demoProvider.findEmail(CID);
+        if (demoEmail != null) {
+            consumerEmails.add(demoEmail);
+            return consumerEmails;
+        }
         CEMS_Connector_v2 cCon = new CEMS_Connector_v2('GET', null);
         
         CareConsumerEmails_Wrapper postResponse = new CareConsumerEmails_Wrapper();
@@ -577,11 +592,9 @@ public without sharing class KH_FindConsumer {
                 CareConsumerEmails_Wrapper.Emails consumerEmail = new CareConsumerEmails_Wrapper.Emails();
                 consumerEmail.address = postResponse.Result.emails[i].address;
                 consumerEmail.dfltInd = postResponse.Result.emails[i].dfltInd;
-                // consumerEmail.lastUpdateDate = postResponse.Result.emails[i].lastUpdateDate;
-                consumerEmail.lastUpdateDate = convertUtcToCentral(postResponse.Result.emails[i].lastUpdateDate);
+                consumerEmail.lastUpdateDate = postResponse.Result.emails[i].lastUpdateDate;
                 consumerEmail.sharedEmail = postResponse.Result.emails[i].sharedEmail;
-               // consumerEmail.CapturedDt = postResponse.Result.emails[i].CapturedDt;
-                consumerEmail.CapturedDt = convertUtcToCentral(postResponse.Result.emails[i].CapturedDt);
+                consumerEmail.CapturedDt = postResponse.Result.emails[i].CapturedDt;
                 //consumerEmail.sourceOfDataDesc = postResponse.Result.emails[i].sourceOfDataDesc;
                // consumerEmail.sourceOfDataDesc = translateSourceDesc(postResponse.Result.emails[i].sourceOfDataDesc);
                 consumerEmail.sourceOfDataDesc =translateSource(postResponse.Result.emails[i].sourceOfDataDesc);
@@ -601,7 +614,7 @@ public without sharing class KH_FindConsumer {
     }
     
     //Naeem: care-1156 Ability to delete email association to Consumer record
-    public static String translateSourceDesc(String sourceOfDataDesc) {
+  /*  public static String translateSourceDesc(String sourceOfDataDesc) {
         String sourceDesc = '';
         if(sourceOfDataDesc == 'Consumer Care Profile' || sourceOfDataDesc == 'CONSUMER CARE PROFILE' )
             sourceDesc = 'CareTools';
@@ -645,7 +658,7 @@ public without sharing class KH_FindConsumer {
             sourceDesc = sourceOfDataDesc;
         
         return sourceDesc;
-    }
+    }*/
     
     //Naeem: care-1156 Ability to delete email association to Consumer record
     @AuraEnabled
@@ -684,6 +697,14 @@ public without sharing class KH_FindConsumer {
        public static List<CareConsumerPhones_Wrapper.Phones> getConsumerPhones(String CID) {
            
            List<CareConsumerPhones_Wrapper.Phones> consumerPhones = new List<CareConsumerPhones_Wrapper.Phones>();
+           KhDemoProvider demoProvider = getKhDemoProvider();
+           CareConsumerPhones_Wrapper.Phones demoPhone = demoProvider == null
+               ? null
+               : demoProvider.findPhone(CID);
+           if (demoPhone != null) {
+               consumerPhones.add(demoPhone);
+               return consumerPhones;
+           }
            CEMS_Connector_v2 cCon = new CEMS_Connector_v2('GET', null);
            
            CareConsumerPhones_Wrapper postResponse = new CareConsumerPhones_Wrapper();
@@ -699,11 +720,9 @@ public without sharing class KH_FindConsumer {
                    consumerPhone.phone = postResponse.Result.phones[i].phone;
                    consumerPhone.phoneType = postResponse.Result.phones[i].phoneType;
                    consumerPhone.dfltInd = postResponse.Result.phones[i].dfltInd;
-                   // consumerPhone.lastUpdateDate = postResponse.Result.phones[i].lastUpdateDate;
-                   consumerPhone.lastUpdateDate = convertUtcToCentral(postResponse.Result.phones[i].lastUpdateDate);
+                   consumerPhone.lastUpdateDate = postResponse.Result.phones[i].lastUpdateDate;
                    consumerPhone.internationalPrefix = postResponse.Result.phones[i].internationalPrefix;
-                   // consumerPhone.CapturedDt = postResponse.Result.phones[i].CapturedDt;
-                   consumerPhone.CapturedDt = convertUtcToCentral(postResponse.Result.phones[i].CapturedDt);
+                   consumerPhone.CapturedDt = postResponse.Result.phones[i].CapturedDt;
                   // consumerPhone.sourceOfDataDesc = translateSourceDescForPhone(postResponse.Result.phones[i].sourceOfDataDesc);
                    consumerPhone.sourceOfDataDesc = translateSource(postResponse.Result.phones[i].sourceOfDataDesc);
                    consumerPhone.phoneOptIn = postResponse.Result.phones[i].phoneOptIn;
@@ -722,7 +741,7 @@ public without sharing class KH_FindConsumer {
            }
        }
 
-       public static String translateSourceDescForPhone(String sourceOfDataDesc) {
+     /*  public static String translateSourceDescForPhone(String sourceOfDataDesc) {
             // Handle null input
             if (sourceOfDataDesc == null) {
                 return '';
@@ -735,7 +754,7 @@ public without sharing class KH_FindConsumer {
                 ? SOURCE_MAPPINGS.get(normalizedInput) 
                 : sourceOfDataDesc;
         }
-   
+   */
        @AuraEnabled
        public static String deletePhones(String CID, String phonesList) {
            system.debug('deletePhones phonesList == '+phonesList);
@@ -771,9 +790,19 @@ public without sharing class KH_FindConsumer {
     //Naeem: care-3406 Get Consumer Email Preferences
     @AuraEnabled
     public static CareConEmailPrefGETWrapper getConsumerEmailPrefs(Id recordId) {
-        String consumerCID = KH_FindConsumer.getConsumerCID(recordId);
+       // String consumerCID = KH_FindConsumer.getConsumerCID(recordId);
+         String consumerCID = '';
+         CareConEmailPrefGETWrapper postResponse = new CareConEmailPrefGETWrapper();
+         Account acc;
+            if(recordId != null){
+                 acc = [SELECT PersonEmail, CID__c 
+                    FROM Account 
+                    WHERE Id = :recordId 
+                    LIMIT 1];      
+                 consumerCID = acc.CID__c;         
+                    System.debug('getConsumerCID consumerCID === '+consumerCID);
+            }
       //  CareConEmailPrefGETWrapper conEmailPrefs = new CareConEmailPrefGETWrapper();
-          CareConEmailPrefGETWrapper postResponse = new CareConEmailPrefGETWrapper();
         if (String.isNotBlank(consumerCID))
         {          
             CEMS_Connector_v2 cCon = new CEMS_Connector_v2('GET', null);
@@ -807,7 +836,7 @@ public without sharing class KH_FindConsumer {
                         translateSource(pref.prfSourceOfDataDesc);
                 }
             }
-        
+        postResponse.accountEmail = acc.PersonEmail;
 
         }
         return postResponse;
@@ -866,7 +895,7 @@ public without sharing class KH_FindConsumer {
         requestWrapper.communicationPreferences.postalPreferences = null;
         
         Datetime currentGmtDateTime = Datetime.now();
-                
+        
         for (UpdatedEmailPreferenceWrapper pref : updatedPreferences) {
             if (pref == null || pref.prfTypeId == null) {
                 continue;
@@ -905,7 +934,7 @@ public without sharing class KH_FindConsumer {
                 response.message = 'Preferences updated successfully.';
             } else {
                 response.success = false;
-                response.message = 'The consumer Email preferences failed to updated! ';
+                response.message = 'Unable to update preferences at this time. Press save to try again.';
             }
             
         } 
@@ -931,265 +960,41 @@ public without sharing class KH_FindConsumer {
 
         String key = source.trim().toLowerCase();
 
+        Map<String, String> translations = getMetadataSourceTranslations();
+        if (translations.containsKey(key)) {
+            return translations.get(key);
+        }
+
         return SOURCE_TRANSLATIONS.containsKey(key)
             ? SOURCE_TRANSLATIONS.get(key)
             : source;
     }
-        
-    @AuraEnabled(cacheable=true)
-    public static List<CEMS_CustomerData_Wrapper.AlternateId> getConsumerAccounts(Id recordId) {
-        if (recordId == null) {
-            return new List<CEMS_CustomerData_Wrapper.AlternateId>();
-        }
-        System.debug('getConsumerAccounts recordId == '+recordId);
-        
-        List<Consumer_Account__c> consumerAccounts = [SELECT Id, val__c, Login_Email__c, Last_Login_TS__c
-                                                      FROM Consumer_Account__c
-                                                      WHERE Consumer__c = :recordId];
-        
-        System.debug('getConsumerAccounts consumerAccounts == '+consumerAccounts);        
-        List<CEMS_CustomerData_Wrapper.AlternateId> rows = new List<CEMS_CustomerData_Wrapper.AlternateId>();
-        
-        for (Consumer_Account__c consumerAccount : consumerAccounts) {
-            CEMS_CustomerData_Wrapper.AlternateId row = new CEMS_CustomerData_Wrapper.AlternateId();
-            
-            row.val = consumerAccount.val__c;
-            row.loginEmail = consumerAccount.Login_Email__c;
-            row.lastLoginTS = consumerAccount.Last_Login_TS__c;
-            
-            rows.add(row);
-        }
-        System.debug('getConsumerAccounts rows == '+rows);       
-        return rows;
-    }
-    @AuraEnabled(cacheable=true)
-    public static Boolean canCurrentUserViewHdxRef() {
-        Set<String> allowedProfiles = new Set<String>{
-            'Care - Supervisor - Hallmark',
-                'Care - Admin',
-                'System Administrator'
-                };
-                    
-                    String currentProfileName = [
-                        SELECT Name
-                        FROM Profile
-                        WHERE Id = :UserInfo.getProfileId()
-                        LIMIT 1
-                    ].Name;
-        
-        return allowedProfiles.contains(currentProfileName);
-    }    
-    
-    
-    @AuraEnabled
-    public static List<KH_ConsumerMergeWrapper> getDuplicateKnowHerConsumers(
-        Id accountId
-    ) {
-        
-        List<KH_ConsumerMergeWrapper> consumerRecordsMerged =
-            new List<KH_ConsumerMergeWrapper>();
-        
-        if (accountId == null) {
-            return consumerRecordsMerged;
-        }
-        
-        List<Account> accounts = [
-            SELECT
-            Id,
-            FirstName,
-            LastName,
-            PersonEmail,
-            PersonHomePhone,
-            Mailing_Zip_Postal_Code__c
-            FROM Account
-            WHERE Id = :accountId
-            AND IsPersonAccount = TRUE
-            LIMIT 1
-        ];
-        
-        if (accounts.isEmpty()) {
-            return consumerRecordsMerged;
-        }
-        
-        Account consumerRecord = accounts[0];
-        
-        CEMS_Connector_v2 cemConnect =
-            new CEMS_Connector_v2(
-                'GET',
-                null
-            );
-        
-        /*
-* IMPORTANT:
-* Keep this search the same as fetchConsumer().
-*
-* processRecords = false
-*/
-        CEMS_CustomerData_Wrapper consumerRecords =
-            cemConnect.CEMS_Get(
-                null,
-                consumerRecord.PersonHomePhone,
-                consumerRecord.PersonEmail,
-                consumerRecord.FirstName,
-                consumerRecord.LastName,
-                consumerRecord.Mailing_Zip_Postal_Code__c,
-                null,
-                null,
-                false
-            );
-        
-        if (
-            consumerRecords == null ||
-            consumerRecords.Result == null ||
-            consumerRecords.Result.consumers == null
-        ) {
-            return consumerRecordsMerged;
-        }
-        
-        if (
-            consumerRecords.Errors != null &&
-            !consumerRecords.Errors.isEmpty()
-        ) {
-            return consumerRecordsMerged;
-        }
-        
-        for (
-            CEMS_CustomerData_Wrapper.Consumers consumer :
-            consumerRecords.Result.consumers
-        ) {
-            
-            KH_ConsumerMergeWrapper cemsMerge =
-                new KH_ConsumerMergeWrapper();
-            
-            cemsMerge.source = 'CCDB';
-            cemsMerge.CID = consumer.consumerId;
-            
-            if (consumer.email != null) {
-                cemsMerge.email =
-                    consumer.email.address;
-            }
-            
-            if (consumer.phone != null) {
-                cemsMerge.phone =
-                    consumer.phone.homeNumber;
-                
-                cemsMerge.mobilePhone =
-                    consumer.phone.mobileNumber;
-            }
-            
-            if (consumer.name != null) {
-                cemsMerge.firstName =
-                    consumer.name.firstName;
-                
-                cemsMerge.lastName =
-                    consumer.name.lastName;
-            }
-            
-            if (consumer.address != null) {
-                
-                cemsMerge.postalCode =
-                    consumer.address.zip;
-                
-                String mailingStreet = '';
-                
-                if (
-                    String.isNotBlank(
-                        consumer.address.addressLine1
-                    )
-                ) {
-                    mailingStreet =
-                        consumer.address.addressLine1;
-                }
-                
-                if (
-                    String.isNotBlank(
-                        consumer.address.addressLine2
-                    )
-                ) {
-                    
-                    if (
-                        String.isNotBlank(
-                            mailingStreet
-                        )
-                    ) {
-                        mailingStreet += ' ';
-                    }
-                    
-                    mailingStreet +=
-                        consumer.address.addressLine2;
-                }
-                
-                cemsMerge.mailingStreet =
-                    mailingStreet;
-            }
-            
-            if (
-                String.isNotBlank(
-                    consumer.dateOfBirth
-                ) &&
-                consumer.dateOfBirth.length() >= 4
-            ) {
-                
-                Map<String, String> months =
-                    new Map<String, String>{
-                        '01' => 'January',
-                            '02' => 'February',
-                            '03' => 'March',
-                            '04' => 'April',
-                            '05' => 'May',
-                            '06' => 'June',
-                            '07' => 'July',
-                            '08' => 'August',
-                            '09' => 'September',
-                            '10' => 'October',
-                            '11' => 'November',
-                            '12' => 'December'
-                            };
-                                
-                                String month =
-                                months.get(
-                                    consumer.dateOfBirth.substring(
-                                        0,
-                                        2
-                                    )
-                                );
-                
-                if (month != null) {
-                    cemsMerge.birthday =
-                        month +
-                        ' ' +
-                        consumer.dateOfBirth.substring(
-                            2,
-                            4
-                        );
+
+    private static Map<String, String> getMetadataSourceTranslations() {
+        if (metadataSourceTranslations == null) {
+            metadataSourceTranslations = new Map<String, String>();
+            for (Contract_Info_Translation__mdt metadataRecord : [
+                SELECT Contract_Info_Title__c, Translated_Title__c
+                FROM Contract_Info_Translation__mdt
+            ]) {
+                if (String.isNotBlank(metadataRecord.Contract_Info_Title__c)
+                    && String.isNotBlank(metadataRecord.Translated_Title__c)) {
+                    metadataSourceTranslations.put(
+                        metadataRecord.Contract_Info_Title__c.trim().toLowerCase(),
+                        metadataRecord.Translated_Title__c
+                    );
                 }
             }
-            
-            if (consumer.memberships != null) {
-                
-                for (
-                    CEMS_CustomerData_Wrapper.Memberships member :
-                    consumer.memberships
-                ) {
-                    
-                    if (
-                        member.membershipType ==
-                        'Crown Rewards'
-                    ) {
-                        cemsMerge.memberId =
-                            member.id;
-                        
-                        break;
-                    }
+            if (sourceTranslationOverrides != null) {
+                for (String overrideKey : sourceTranslationOverrides.keySet()) {
+                    metadataSourceTranslations.put(
+                        overrideKey.trim().toLowerCase(),
+                        sourceTranslationOverrides.get(overrideKey)
+                    );
                 }
             }
-            
-            consumerRecordsMerged.add(
-                cemsMerge
-            );
         }
-        
-        return consumerRecordsMerged;
+        return metadataSourceTranslations;
     }
     
 }
